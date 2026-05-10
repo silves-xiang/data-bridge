@@ -19,11 +19,15 @@ import (
 	"github.com/silves-xiang/data-bridge/pkg/source"
 
 	// Register plugins via blank imports.
+	_ "github.com/silves-xiang/data-bridge/plugins/clickhouse"
 	_ "github.com/silves-xiang/data-bridge/plugins/hooks/exec"
 	_ "github.com/silves-xiang/data-bridge/plugins/hooks/timescale"
 	_ "github.com/silves-xiang/data-bridge/plugins/influxdb"
+	_ "github.com/silves-xiang/data-bridge/plugins/kafka"
+	_ "github.com/silves-xiang/data-bridge/plugins/mongodb"
 	_ "github.com/silves-xiang/data-bridge/plugins/mysql"
 	_ "github.com/silves-xiang/data-bridge/plugins/postgresql"
+	_ "github.com/silves-xiang/data-bridge/plugins/redis"
 )
 
 var (

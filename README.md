@@ -22,8 +22,10 @@ Migrate data between different databases with ease.
 | MySQL | ✓ | ✓ |
 | PostgreSQL | ✓ | ✓ |
 | InfluxDB | ✓ | ✓ |
-
-More coming: MongoDB, Redis, Kafka, ClickHouse.
+| ClickHouse | ✓ | ✓ |
+| MongoDB | ✓ | ✓ |
+| Redis | ✓ | ✓ |
+| Kafka | ✓ | ✓ |
 
 ## Quick Start
 

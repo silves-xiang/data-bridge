@@ -22,8 +22,10 @@
 | MySQL | ✓ | ✓ |
 | PostgreSQL | ✓ | ✓ |
 | InfluxDB | ✓ | ✓ |
-
-即将支持：MongoDB、Redis、Kafka、ClickHouse。
+| ClickHouse | ✓ | ✓ |
+| MongoDB | ✓ | ✓ |
+| Redis | ✓ | ✓ |
+| Kafka | ✓ | ✓ |
 
 ## 快速开始
 
