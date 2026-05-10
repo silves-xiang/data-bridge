@@ -1,0 +1,103 @@
+# databridge example: migrate data from MySQL to PostgreSQL
+task:
+  name: "mysql-to-postgres"
+  mode: full
+
+source:
+  type: mysql
+  connection:
+    host: "127.0.0.1"
+    port: 3306
+    user: "root"
+    password: "${MYSQL_PASSWORD}"
+    database: "source_db"
+  params:
+    charset: "utf8mb4"
+
+sink:
+  type: postgresql
+  connection:
+    host: "127.0.0.1"
+    port: 5432
+    user: "postgres"
+    password: "${PG_PASSWORD}"
+    database: "target_db"
+    ssl_mode: "disable"
+    search_path: "public"
+  params:
+    truncate_before_write: false
+
+# Optional: specify tables to migrate. If omitted, all tables are migrated.
+tables:
+  - source: "users"
+    target: "users"
+    batch_size: 5000
+    columns:
+      - source: "id"
+        target: "id"
+      - source: "name"
+        target: "name"
+      - source: "email"
+        target: "email"
+      - source: "created_at"
+        target: "created_at"
+
+  - source: "orders"
+    target: "orders"
+    batch_size: 2000
+    columns:
+      - source: "id"
+        target: "id"
+      - source: "user_id"
+        target: "user_id"
+      - source: "total_amount"
+        target: "total"
+      - source: "order_date"
+        target: "order_date"
+
+# Parallel table migrations.
+parallelism: 4
+
+# Checkpoint for resume support.
+checkpoint:
+  enabled: true
+  dir: "./.databridge/checkpoints"
+
+# Error handling: fail_fast | skip_row | skip_table
+error_handling:
+  mode: "skip_table"
+  max_retries_per_table: 3
+  retry_delay: "5s"
+
+# Optional hooks.
+hooks:
+  # Run custom SQL after each table migration.
+  - name: "analyze-tables"
+    type: "exec"
+    params:
+      on_table_end: "ANALYZE {{ .Name }}"
+
+  # TimescaleDB hypertable setup (requires timescaledb extension).
+  # - name: "create-hypertables"
+  #   type: "timescale"
+  #   params:
+  #     partition_column: "created_at"
+  #     hypertable_interval: "7 days"
+  #     enable_compression: true
+  #     compression_after: "30 days"
+
+# Debug diagnostics.
+debug:
+  enabled: false
+  verbose_batch: false
+  log_memory: false
+
+# Pprof profiling.
+pprof:
+  enabled: false
+  dir: "./.databridge/pprof"
+  interval: "5m"
+  profiles:
+    - "heap"
+    - "goroutine"
+  cpu_duration: "30s"

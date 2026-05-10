@@ -1,0 +1,21 @@
+# Binaries
+/bin/
+*.exe
+*.test
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Runtime artifacts
+.databridge/
+
+# Go
+vendor/
+
+# OS
+.DS_Store
+Thumbs.db
