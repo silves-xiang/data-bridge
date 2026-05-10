@@ -15,16 +15,17 @@ var envVarPattern = regexp.MustCompile(`\$\{([^}]+)\}`)
 
 // Config is the top-level configuration structure.
 type Config struct {
-	Task      TaskConfig      `yaml:"task"`
-	Source    ConnectorConfig `yaml:"source"`
-	Sink      ConnectorConfig `yaml:"sink"`
-	Tables    []TableConfig   `yaml:"tables"`
-	Parallelism int           `yaml:"parallelism"`
-	ErrorHandling ErrorConfig `yaml:"error_handling"`
+	Task         TaskConfig      `yaml:"task"`
+	Source       ConnectorConfig `yaml:"source"`
+	Sink         ConnectorConfig `yaml:"sink"`
+	Tables       []TableConfig   `yaml:"tables"`
+	Parallelism  int             `yaml:"parallelism"`
+	ErrorHandling ErrorConfig    `yaml:"error_handling"`
 	Checkpoint   CheckpointConfig `yaml:"checkpoint"`
-	Hooks        []HookConfig     `yaml:"hooks"`
-	Debug        DebugConfig      `yaml:"debug"`
-	Pprof        PprofConfig      `yaml:"pprof"`
+	Hooks        []HookConfig    `yaml:"hooks"`
+	Debug        DebugConfig     `yaml:"debug"`
+	Pprof        PprofConfig     `yaml:"pprof"`
+	PluginDir    string          `yaml:"plugin_dir"`
 }
 
 // TaskConfig identifies the migration task.
@@ -165,6 +166,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Pprof.CPUDuration == "" {
 		c.Pprof.CPUDuration = "30s"
+	}
+	if c.PluginDir == "" {
+		c.PluginDir = "./plugins"
 	}
 }
 

@@ -5,26 +5,31 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
 	"runtime"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
 	"github.com/silves-xiang/data-bridge/internal/config"
 	"github.com/silves-xiang/data-bridge/internal/pipeline"
 	"github.com/silves-xiang/data-bridge/pkg/hook"
+	"github.com/silves-xiang/data-bridge/pkg/plugin"
 	"github.com/silves-xiang/data-bridge/pkg/sink"
 	"github.com/silves-xiang/data-bridge/pkg/source"
 
 	// Register plugins via blank imports.
 	_ "github.com/silves-xiang/data-bridge/plugins/hooks/exec"
 	_ "github.com/silves-xiang/data-bridge/plugins/hooks/timescale"
+	_ "github.com/silves-xiang/data-bridge/plugins/influxdb"
 	_ "github.com/silves-xiang/data-bridge/plugins/mysql"
 	_ "github.com/silves-xiang/data-bridge/plugins/postgresql"
 )
 
 var (
-	version = "0.1.0"
-	cfgFile string
+	version      = "0.1.0"
+	cfgFile      string
+	pluginLoader *plugin.Loader
 )
 
 func main() {
@@ -52,6 +57,35 @@ to run a migration.`,
 	}
 }
 
+// setupPlugins initializes the dynamic plugin loader and installs the SIGHUP handler.
+func setupPlugins(pluginDir string) {
+	pluginLoader = plugin.NewLoader(pluginDir)
+
+	if err := pluginLoader.Load(); err != nil {
+		slog.Warn("failed to load dynamic plugins", "error", err)
+		return
+	}
+
+	loaded := pluginLoader.List()
+	if len(loaded) > 0 {
+		slog.Info("dynamic plugins loaded", "count", len(loaded), "dir", pluginDir)
+	}
+
+	// SIGHUP triggers plugin reload.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGHUP)
+	go func() {
+		for range sigCh {
+			slog.Info("received SIGHUP, reloading plugins")
+			if err := pluginLoader.Reload(); err != nil {
+				slog.Warn("plugin reload failed", "error", err)
+			} else {
+				slog.Info("plugins reloaded", "count", len(pluginLoader.List()))
+			}
+		}
+	}()
+}
+
 func migrateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "migrate",
@@ -62,6 +96,9 @@ func migrateCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
+
+				// Load dynamic plugins.
+				setupPlugins(cfg.PluginDir)
 
 			slog.Info("databridge starting",
 				"task", cfg.Task.Name,

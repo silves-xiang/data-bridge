@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+
 	"sort"
 	"sync"
 )
@@ -74,13 +76,21 @@ var (
 )
 
 // Register registers a source factory. Call from init() in plugin packages.
+// If a source with the same name is already registered, it is overwritten with a warning.
 func Register(name string, f Factory) {
 	registryMu.Lock()
 	defer registryMu.Unlock()
 	if _, ok := registry[name]; ok {
-		panic(fmt.Sprintf("source %q already registered", name))
+		slog.Warn("source already registered, overwriting", "name", name)
 	}
 	registry[name] = f
+}
+
+// Unregister removes a source factory. Safe to call on non-existent names.
+func Unregister(name string) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	delete(registry, name)
 }
 
 // Get returns the factory for a named source.

@@ -121,14 +121,16 @@ func (p *Pipeline) Run(ctx context.Context) error {
 	debug.SetupDebug(p.cfg.Debug.Enabled, p.cfg.Debug.VerboseBatch, p.cfg.Debug.LogMemory)
 
 	// 1. Open connections.
+	srcCfg := mergeConfig(p.cfg.Source.Connection, p.cfg.Source.Params)
 	slog.Info("connecting to source", "type", p.cfg.Source.Type)
-	if err := p.source.Open(ctx, p.cfg.Source.Connection); err != nil {
+	if err := p.source.Open(ctx, srcCfg); err != nil {
 		return fmt.Errorf("open source: %w", err)
 	}
 	defer p.source.Close()
 
+	snkCfg := mergeConfig(p.cfg.Sink.Connection, p.cfg.Sink.Params)
 	slog.Info("connecting to sink", "type", p.cfg.Sink.Type)
-	if err := p.sink.Open(ctx, p.cfg.Sink.Connection); err != nil {
+	if err := p.sink.Open(ctx, snkCfg); err != nil {
 		return fmt.Errorf("open sink: %w", err)
 	}
 	defer p.sink.Close()
@@ -400,4 +402,19 @@ func (p *Pipeline) printSummary(result hook.PipelineResult, failed int) {
 			slog.Error("error", "detail", e)
 		}
 	}
+}
+
+// mergeConfig merges params into the connection map, with params taking precedence.
+func mergeConfig(conn, params map[string]any) map[string]any {
+	if len(params) == 0 {
+		return conn
+	}
+	merged := make(map[string]any, len(conn)+len(params))
+	for k, v := range conn {
+		merged[k] = v
+	}
+	for k, v := range params {
+		merged[k] = v
+	}
+	return merged
 }

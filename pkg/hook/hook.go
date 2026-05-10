@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"sync"
 	"time"
@@ -105,13 +106,21 @@ var (
 )
 
 // Register registers a hook factory. Call from init() in hook plugin packages.
+// If a hook with the same name is already registered, it is overwritten with a warning.
 func Register(name string, f Factory) {
 	registryMu.Lock()
 	defer registryMu.Unlock()
 	if _, ok := registry[name]; ok {
-		panic(fmt.Sprintf("hook %q already registered", name))
+		slog.Warn("hook already registered, overwriting", "name", name)
 	}
 	registry[name] = f
+}
+
+// Unregister removes a hook factory. Safe to call on non-existent names.
+func Unregister(name string) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	delete(registry, name)
 }
 
 // Get returns the factory for a named hook.

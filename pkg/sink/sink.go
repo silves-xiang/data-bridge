@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"sync"
 
@@ -61,13 +62,21 @@ var (
 )
 
 // Register registers a sink factory. Call from init() in plugin packages.
+// If a sink with the same name is already registered, it is overwritten with a warning.
 func Register(name string, f Factory) {
 	registryMu.Lock()
 	defer registryMu.Unlock()
 	if _, ok := registry[name]; ok {
-		panic(fmt.Sprintf("sink %q already registered", name))
+		slog.Warn("sink already registered, overwriting", "name", name)
 	}
 	registry[name] = f
+}
+
+// Unregister removes a sink factory. Safe to call on non-existent names.
+func Unregister(name string) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	delete(registry, name)
 }
 
 // Get returns the factory for a named sink.
