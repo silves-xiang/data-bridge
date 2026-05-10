@@ -218,3 +218,76 @@ func TestInfluxDBToPostgres(t *testing.T) {
 
 	fmt.Println("influxdb → postgres test passed")
 }
+
+// TestInfluxDBPagination verifies time-based cursor pagination with multiple batches.
+func TestInfluxDBPagination(t *testing.T) {
+	pgEnv := SetupTestEnv(t)
+	ctx := context.Background()
+	defer pgEnv.Teardown(ctx)
+
+	infEnv := setupInfluxDB(t)
+	defer infEnv.Teardown(ctx)
+
+	// Seed 12 data points — will need 3 batches at batch_size=5.
+	client := influxdb2.NewClient(infEnv.URL, infEnv.Token)
+	defer client.Close()
+	writeAPI := client.WriteAPI(infEnv.Org, infEnv.Bucket)
+
+	baseTime := time.Now().Add(-10 * time.Minute).UTC()
+	for i := 0; i < 12; i++ {
+		ptTime := baseTime.Add(time.Duration(i) * time.Second)
+		p := influxdb2.NewPoint(
+			"pagination_test",
+			map[string]string{"batch": fmt.Sprintf("group-%d", i/5)},
+			map[string]any{"index": int64(i), "val": fmt.Sprintf("val-%d", i)},
+			ptTime,
+		)
+		writeAPI.WritePoint(p)
+	}
+	writeAPI.Flush()
+	select {
+	case err := <-writeAPI.Errors():
+		t.Fatalf("write: %v", err)
+	default:
+	}
+	t.Log("seeded 12 points into InfluxDB")
+
+	cfg := &config.Config{
+		Task: config.TaskConfig{Name: "test-influx-pagination", Mode: "full"},
+		Source: config.ConnectorConfig{Type: "influxdb", Connection: map[string]any{
+			"url": infEnv.URL, "token": infEnv.Token, "org": infEnv.Org, "bucket": infEnv.Bucket,
+		}},
+		Sink: config.ConnectorConfig{Type: "postgresql", Connection: map[string]any{
+			"host": pgEnv.PGHost, "port": pgEnv.PGPort, "user": pgEnv.PGUser,
+			"password": pgEnv.PGPassword, "database": pgEnv.PGDatabase, "ssl_mode": "disable", "search_path": "public",
+		}},
+		Parallelism:   1,
+		ErrorHandling: config.ErrorConfig{Mode: "fail_fast", MaxRetries: 2},
+		Checkpoint:    config.CheckpointConfig{Enabled: false},
+	}
+
+	p, err := pipeline.New(cfg)
+	if err != nil {
+		t.Fatalf("create pipeline: %v", err)
+	}
+	if err := p.Run(ctx); err != nil {
+		t.Fatalf("run pipeline: %v", err)
+	}
+
+	// Verify all 12 rows.
+	pgPool, err := pgxpool.New(ctx, pgEnv.PGDSN())
+	if err != nil {
+		t.Fatalf("connect postgres: %v", err)
+	}
+	defer pgPool.Close()
+
+	var count int
+	if err := pgPool.QueryRow(ctx, `SELECT COUNT(*) FROM "pagination_test"`).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 12 {
+		t.Errorf("row count = %d, want 12 (pagination verification failed)", count)
+	}
+
+	fmt.Println("influxdb pagination test passed")
+}

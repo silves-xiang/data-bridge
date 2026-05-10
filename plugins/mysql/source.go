@@ -254,3 +254,33 @@ func (s *Source) ReadBatch(ctx context.Context, table source.TableInfo, offset u
 func (s *Source) DB() *sql.DB {
 	return s.db
 }
+
+func columnIdx(columns []source.ColumnInfo, name string) int {
+	for i, col := range columns {
+		if col.Name == name {
+			return i
+		}
+	}
+	return -1
+}
+
+func anyToUint64(v any) uint64 {
+	switch t := v.(type) {
+	case int64:
+		return uint64(t)
+	case int32:
+		return uint64(t)
+	case float64:
+		return uint64(t)
+	case string:
+		for _, c := range t {
+			if c < '0' || c > '9' {
+				return 0
+			}
+		}
+		var n uint64
+		fmt.Sscanf(t, "%d", &n)
+		return n
+	}
+	return 0
+}

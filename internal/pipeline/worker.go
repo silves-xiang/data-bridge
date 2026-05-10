@@ -83,7 +83,11 @@ func (p *Pipeline) migrateTable(ctx context.Context, table source.TableInfo) err
 		batchDuration := time.Since(batchStart)
 
 		// Update checkpoint.
-		p.ckptSetOffset(table.Name, offset+1)
+		nextOff := offset + 1
+		if batch.NextOffset > 0 {
+			nextOff = batch.NextOffset
+		}
+		p.ckptSetOffset(table.Name, nextOff)
 		p.ckptAddRows(table.Name, uint64(written))
 		p.ckptSave()
 

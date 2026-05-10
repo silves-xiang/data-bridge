@@ -45,13 +45,20 @@ func parseConnection(cfg map[string]any) CHConnection {
 
 // Source implements source.Source for ClickHouse.
 type Source struct {
-	db     *sql.DB
-	config CHConnection
+	db        *sql.DB
+	config    CHConnection
+	batchSize int
 }
 
 // Open establishes a ClickHouse connection.
 func (s *Source) Open(ctx context.Context, config map[string]any) error {
 	s.config = parseConnection(config)
+	s.batchSize = 1000
+	if bs, ok := config["batch_size"].(float64); ok && bs > 0 {
+		s.batchSize = int(bs)
+	} else if bs, ok := config["batch_size"].(int); ok && bs > 0 {
+		s.batchSize = bs
+	}
 
 	dsn := fmt.Sprintf("clickhouse://%s:%s@%s:%d/%s?dial_timeout=10s&read_timeout=30s",
 		s.config.User, s.config.Password, s.config.Host, s.config.Port, s.config.Database)
@@ -158,12 +165,24 @@ func (s *Source) EstimateRowCount(ctx context.Context, tableName string) (int64,
 	return count, err
 }
 
-// ReadBatch reads a page of rows using offset-based pagination.
+// ReadBatch reads a page of rows using cursor-based pagination on the first PK column.
 func (s *Source) ReadBatch(ctx context.Context, table source.TableInfo, offset uint64) (source.RowBatch, error) {
-	batchSize := 1000
+	batchSize := s.batchSize
+	cursorIdx := cursorIndex(table)
 
-	query := fmt.Sprintf("SELECT * FROM `%s`.`%s` LIMIT %d OFFSET %d",
-		s.config.Database, table.Name, batchSize, offset*uint64(batchSize))
+	var query string
+	if len(table.PrimaryKey) > 0 && cursorIdx >= 0 && offset > 0 {
+		pkCol := table.PrimaryKey[0]
+		query = fmt.Sprintf("SELECT * FROM `%s`.`%s` WHERE `%s` > %d ORDER BY `%s` LIMIT %d",
+			s.config.Database, table.Name, pkCol, offset, pkCol, batchSize)
+	} else if len(table.PrimaryKey) > 0 && cursorIdx >= 0 {
+		pkCol := table.PrimaryKey[0]
+		query = fmt.Sprintf("SELECT * FROM `%s`.`%s` ORDER BY `%s` LIMIT %d",
+			s.config.Database, table.Name, pkCol, batchSize)
+	} else {
+		query = fmt.Sprintf("SELECT * FROM `%s`.`%s` LIMIT %d",
+			s.config.Database, table.Name, batchSize)
+	}
 
 	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
@@ -177,6 +196,7 @@ func (s *Source) ReadBatch(ctx context.Context, table source.TableInfo, offset u
 	}
 
 	batch := source.RowBatch{Offset: offset}
+	var lastCursor any
 
 	for rows.Next() {
 		values := make([]any, len(columns))
@@ -195,6 +215,9 @@ func (s *Source) ReadBatch(ctx context.Context, table source.TableInfo, offset u
 			}
 		}
 
+		if cursorIdx >= 0 && cursorIdx < len(values) {
+			lastCursor = values[cursorIdx]
+		}
 		batch.Rows = append(batch.Rows, values)
 	}
 
@@ -205,6 +228,42 @@ func (s *Source) ReadBatch(ctx context.Context, table source.TableInfo, offset u
 	if len(batch.Rows) < batchSize {
 		batch.IsLast = true
 	}
+	if lastCursor != nil {
+		batch.NextOffset = toUint64(lastCursor)
+	}
 
 	return batch, nil
+}
+
+// cursorIndex returns the column index of the first primary key, or -1.
+func cursorIndex(table source.TableInfo) int {
+	if len(table.PrimaryKey) == 0 {
+		return -1
+	}
+	return columnIndex(table, table.PrimaryKey[0])
+}
+
+func columnIndex(table source.TableInfo, name string) int {
+	for i, col := range table.Columns {
+		if col.Name == name {
+			return i
+		}
+	}
+	return -1
+}
+
+func toUint64(v any) uint64 {
+	switch t := v.(type) {
+	case int64:
+		return uint64(t)
+	case int32:
+		return uint64(t)
+	case float64:
+		return uint64(t)
+	case string:
+		var n uint64
+		fmt.Sscanf(t, "%d", &n)
+		return n
+	}
+	return 0
 }

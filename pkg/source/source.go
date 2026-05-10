@@ -61,10 +61,11 @@ type ColumnInfo struct {
 
 // RowBatch is a batch of rows returned by ReadBatch.
 type RowBatch struct {
-	Rows      [][]any  // Each inner slice is one row, values in column order
-	Offset    uint64   // The offset that was requested
-	TotalRows *uint64  // Total rows in table (for progress), nil if unknown
-	IsLast    bool     // True if this is the final batch
+	Rows       [][]any // Each inner slice is one row, values in column order
+	Offset     uint64  // The offset that was requested
+	NextOffset uint64  // Cursor value for the next call (used for cursor-based pagination)
+	TotalRows  *uint64 // Total rows in table (for progress), nil if unknown
+	IsLast     bool    // True if this is the final batch
 }
 
 // Factory creates a new Source instance.

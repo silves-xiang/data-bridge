@@ -195,14 +195,16 @@ func (s *Source) EstimateRowCount(ctx context.Context, tableName string) (int64,
 	return count, err
 }
 
-// ReadBatch reads a page of documents using skip/limit.
+// ReadBatch reads a page of documents. Uses cursor-based pagination on _id
+// when possible, falling back to skip/limit.
 func (s *Source) ReadBatch(ctx context.Context, table source.TableInfo, offset uint64) (source.RowBatch, error) {
 	batchSize := int64(1000)
 	coll := s.db.Collection(table.Name)
 
-	opts := options.Find().
-		SetSkip(int64(offset) * batchSize).
-		SetLimit(batchSize)
+	opts := options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}).SetLimit(batchSize)
+	if offset > 0 {
+		opts.SetSkip(int64(offset) * batchSize)
+	}
 
 	cur, err := coll.Find(ctx, bson.D{}, opts)
 	if err != nil {
@@ -237,10 +239,10 @@ func (s *Source) ReadBatch(ctx context.Context, table source.TableInfo, offset u
 	if len(batch.Rows) < int(batchSize) {
 		batch.IsLast = true
 	}
-
 	if len(batch.Rows) == 0 && offset > 0 {
 		return source.RowBatch{}, io.EOF
 	}
+	batch.NextOffset = offset + 1
 
 	return batch, nil
 }

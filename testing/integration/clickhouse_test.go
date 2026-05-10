@@ -142,3 +142,89 @@ func TestClickHouseToPostgres(t *testing.T) {
 
 	fmt.Println("clickhouse → postgres test passed")
 }
+
+// TestClickHousePagination verifies cursor-based pagination with multiple batches.
+func TestClickHousePagination(t *testing.T) {
+	pgEnv := SetupTestEnv(t)
+	ctx := context.Background()
+	defer pgEnv.Teardown(ctx)
+
+	chHost, chPort, chTeardown := setupClickHouse(t)
+	defer chTeardown()
+
+	chDSN := fmt.Sprintf("clickhouse://testuser:testpass@%s:%d/testdb?dial_timeout=10s", chHost, chPort)
+	chDB, err := sql.Open("clickhouse", chDSN)
+	if err != nil {
+		t.Fatalf("connect clickhouse: %v", err)
+	}
+	defer chDB.Close()
+
+	// Create table with PK.
+	createSQL := `CREATE TABLE pagination_test (
+		id Int32,
+		val String
+	) ENGINE = MergeTree ORDER BY id`
+	if _, err := chDB.ExecContext(ctx, createSQL); err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+
+	// Insert 12 rows — will need 3 batches at batch_size=5.
+	for i := 0; i < 12; i++ {
+		_, err := chDB.ExecContext(ctx,
+			"INSERT INTO pagination_test (id, val) VALUES (?, ?)",
+			int32(i+1), fmt.Sprintf("value-%d", i))
+		if err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	t.Log("seeded 12 rows into ClickHouse")
+
+	cfg := &config.Config{
+		Task: config.TaskConfig{Name: "test-ch-pagination", Mode: "full"},
+		Source: config.ConnectorConfig{Type: "clickhouse", Connection: map[string]any{
+			"host": chHost, "port": chPort, "user": "testuser", "password": "testpass", "database": "testdb",
+			"batch_size": 5,
+		}},
+		Sink: config.ConnectorConfig{Type: "postgresql", Connection: map[string]any{
+			"host": pgEnv.PGHost, "port": pgEnv.PGPort, "user": pgEnv.PGUser,
+			"password": pgEnv.PGPassword, "database": pgEnv.PGDatabase, "ssl_mode": "disable", "search_path": "public",
+		}},
+		Parallelism:   1,
+		ErrorHandling: config.ErrorConfig{Mode: "fail_fast", MaxRetries: 2},
+		Checkpoint:    config.CheckpointConfig{Enabled: false},
+	}
+
+	p, err := pipeline.New(cfg)
+	if err != nil {
+		t.Fatalf("create pipeline: %v", err)
+	}
+	if err := p.Run(ctx); err != nil {
+		t.Fatalf("run pipeline: %v", err)
+	}
+
+	// Verify all 12 rows were migrated.
+	pgPool, err := pgxpool.New(ctx, pgEnv.PGDSN())
+	if err != nil {
+		t.Fatalf("connect postgres: %v", err)
+	}
+	defer pgPool.Close()
+
+	var count int
+	if err := pgPool.QueryRow(ctx, `SELECT COUNT(*) FROM "pagination_test"`).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 12 {
+		t.Errorf("row count = %d, want 12 (pagination verification failed)", count)
+	}
+
+	// Verify a specific value from the last batch.
+	var val string
+	if err := pgPool.QueryRow(ctx, `SELECT "val" FROM "pagination_test" WHERE "id" = '10'`).Scan(&val); err != nil {
+		t.Fatalf("query last batch: %v", err)
+	}
+	if val != "value-9" {
+		t.Errorf("val = %q, want value-9", val)
+	}
+
+	fmt.Println("clickhouse pagination test passed")
+}

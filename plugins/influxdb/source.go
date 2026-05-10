@@ -222,7 +222,7 @@ func (s *Source) ReadBatch(ctx context.Context, table source.TableInfo, offset u
 		return source.RowBatch{}, fmt.Errorf("influxdb: no metadata for measurement %q", table.Name)
 	}
 
-	fluxQuery := buildReadQuery(s.config.Bucket, table.Name, meta.tagKeys, meta.fieldKeys, int(offset)*batchSize, batchSize)
+	fluxQuery := buildReadQuery(s.config.Bucket, table.Name, meta.tagKeys, meta.fieldKeys, offset, batchSize)
 
 	result, err := queryAPI.Query(ctx, fluxQuery)
 	if err != nil {
@@ -230,6 +230,7 @@ func (s *Source) ReadBatch(ctx context.Context, table source.TableInfo, offset u
 	}
 
 	batch := source.RowBatch{Offset: offset}
+	var lastTime time.Time
 
 	// Build a lookup from column name to position.
 	colIdx := make(map[string]int)
@@ -248,6 +249,7 @@ func (s *Source) ReadBatch(ctx context.Context, table source.TableInfo, offset u
 		if idx, ok := colIdx["_time"]; ok {
 			row[idx] = rowTime.Format("2006-01-02 15:04:05.999999999")
 		}
+		lastTime = rowTime
 
 		// Set tag and field values.
 		for colName, val := range values {
@@ -276,12 +278,15 @@ func (s *Source) ReadBatch(ctx context.Context, table source.TableInfo, offset u
 		return source.RowBatch{}, io.EOF
 	}
 
+	if !lastTime.IsZero() {
+		batch.NextOffset = uint64(lastTime.UnixNano())
+	}
+
 	return batch, nil
 }
 
-// buildReadQuery constructs a Flux query for paginated, pivoted reads.
-func buildReadQuery(bucket, measurement string, tagKeys, fieldKeys []string, skip, limit int) string {
-	// Build pivot rowKey: _time + all tag keys.
+// buildReadQuery constructs a Flux query with time-based cursor pagination.
+func buildReadQuery(bucket, measurement string, tagKeys, fieldKeys []string, cursor uint64, limit int) string {
 	rowKey := make([]string, 1, 1+len(tagKeys))
 	rowKey[0] = "_time"
 	rowKey = append(rowKey, tagKeys...)
@@ -291,16 +296,23 @@ func buildReadQuery(bucket, measurement string, tagKeys, fieldKeys []string, ski
 		rowKeyParts[i] = fmt.Sprintf("%q", k)
 	}
 
+	// Time-based cursor: use range(start: cursor_ns) to avoid deep pagination.
+	startExpr := "0"
+	if cursor > 0 {
+		startExpr = fmt.Sprintf("time(v: %d)", cursor+1) // +1ns to avoid re-reading the last row
+	}
+
 	return fmt.Sprintf(
 		`from(bucket: %q)
-  |> range(start: 0)
+  |> range(start: %s)
   |> filter(fn: (r) => r._measurement == %q)
   |> pivot(rowKey: [%s], columnKey: ["_field"], valueColumn: "_value")
-  |> limit(n: %d, offset: %d)
+  |> sort(columns: ["_time"])
+  |> limit(n: %d)
   |> group()`,
-		bucket, measurement,
+		bucket, startExpr, measurement,
 		strings.Join(rowKeyParts, ", "),
-		limit, skip,
+		limit,
 	)
 }
 
