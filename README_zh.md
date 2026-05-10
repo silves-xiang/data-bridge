@@ -7,6 +7,7 @@
 ## 特性
 
 - **插件化架构** — 新增数据库只需实现接口，无需修改核心代码
+- **动态插件加载** — 运行时加载 `.so` 插件（Go `plugin` 包），支持 SIGHUP 热重载
 - **流式迁移** — 基于批次处理，大表不会 OOM
 - **断点续传** — 中断的迁移可以从断点继续，无需重新开始
 - **并行迁移** — 多张表可配置并发数同时迁移
@@ -20,8 +21,9 @@
 |--------|--------|----------|
 | MySQL | ✓ | ✓ |
 | PostgreSQL | ✓ | ✓ |
+| InfluxDB | ✓ | ✓ |
 
-即将支持：MongoDB、Redis、Kafka、InfluxDB、ClickHouse。
+即将支持：MongoDB、Redis、Kafka、ClickHouse。
 
 ## 快速开始
 
@@ -87,6 +89,31 @@ checkpoint:
   dir: "./.databridge/checkpoints"
 ```
 
+### InfluxDB 配置
+
+InfluxDB 可作为源或目标。作为目标时，可通过 `params` 指定哪些列作为 tag 以及时间戳列：
+
+```yaml
+source:
+  type: influxdb
+  connection:
+    url: "http://localhost:8086"
+    token: "${INFLUXDB_TOKEN}"
+    org: "myorg"
+    bucket: "mybucket"
+
+sink:
+  type: influxdb
+  connection:
+    url: "http://localhost:8086"
+    token: "${INFLUXDB_TOKEN}"
+    org: "myorg"
+    bucket: "target_bucket"
+  params:
+    time_column: "created_at"     # 作为时间戳的源列
+    tag_columns: ["sensor_id"]    # 作为 tag 存储的源列
+```
+
 完整配置示例见 [examples/](examples/)。
 
 ## 架构
@@ -107,10 +134,44 @@ Source (MySQL)  ──ReadBatch──>  Pipeline  ──WriteBatch──>  Sink 
 
 ### 添加新数据库
 
+**编译时（内置）：**
+
 1. 实现 `source.Source` 和/或 `sink.Sink` 接口
 2. 实现 Schema 映射（`SourceTypeMapper` / `TargetTypeMapper`）
 3. 在 `init()` 中注册：`source.Register("名称", factory)` / `sink.Register("名称", factory)`
 4. 在 `cmd/databridge/main.go` 中 import 插件包
+
+**运行时（.so 动态加载）：**
+
+插件可编译为共享对象，运行时加载无需重新编译主程序。每个 `.so` 需导出 `Register` 函数：
+
+```go
+package main
+
+import _ "github.com/silves-xiang/data-bridge/plugins/myplugin"
+
+func Register() {}
+```
+
+构建命令：
+
+```bash
+make plugin-myplugin    # 生成 plugins/myplugin.so
+```
+
+在配置中设置 `plugin_dir`，启动时自动加载：
+
+```yaml
+plugin_dir: "./plugins"
+```
+
+添加或移除 `.so` 文件后，发送 SIGHUP 热重载：
+
+```bash
+kill -SIGHUP $(pgrep databridge)
+```
+
+注意：Go `plugin` 要求插件与主程序使用相同 Go 版本，仅支持 Linux、FreeBSD 和 macOS。
 
 ## Hook
 
