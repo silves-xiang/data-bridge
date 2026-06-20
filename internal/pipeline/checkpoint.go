@@ -50,10 +50,13 @@ func (c *Checkpoint) Load() error {
 }
 
 // Save writes the checkpoint to disk.
+// Holds the lock for the entire operation to prevent concurrent saves
+// from overwriting each other with stale data.
 func (c *Checkpoint) Save() error {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	data, err := json.MarshalIndent(c, "", "  ")
-	c.mu.Unlock()
 	if err != nil {
 		return err
 	}

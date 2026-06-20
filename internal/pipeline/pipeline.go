@@ -31,6 +31,7 @@ type Pipeline struct {
 	// Configuration derived from config.
 	errorMode    string
 	maxRetries   int
+	retryDelay   time.Duration
 	debugEnabled bool
 	verboseBatch bool
 }
@@ -96,6 +97,7 @@ func New(cfg *config.Config) (*Pipeline, error) {
 		checkpoint:    ckpt,
 		errorMode:     cfg.ErrorHandling.Mode,
 		maxRetries:    cfg.ErrorHandling.MaxRetries,
+		retryDelay:    parseRetryDelay(cfg.ErrorHandling.RetryDelay),
 		debugEnabled:  cfg.Debug.Enabled,
 		verboseBatch:  cfg.Debug.VerboseBatch,
 	}, nil
@@ -144,13 +146,12 @@ func (p *Pipeline) Run(ctx context.Context) error {
 	// Filter tables based on config.
 	tables = p.filterTables(tables)
 
-	// Normalize schemas: use sink's search_path as the target schema.
-	sinkSchema := "public"
-	if sp, ok := p.cfg.Sink.Connection["search_path"].(string); ok && sp != "" {
-		sinkSchema = sp
-	}
-	for i := range tables {
-		tables[i].Schema = sinkSchema
+	// Normalize schemas: use sink's search_path as the target schema if configured.
+	// This is primarily for PostgreSQL; non-SQL sinks should set this in their own PrepareTarget.
+	if sinkSchema, ok := p.cfg.Sink.Connection["search_path"].(string); ok && sinkSchema != "" {
+		for i := range tables {
+			tables[i].Schema = sinkSchema
+		}
 	}
 
 	if len(tables) == 0 {
@@ -417,4 +418,13 @@ func mergeConfig(conn, params map[string]any) map[string]any {
 		merged[k] = v
 	}
 	return merged
+}
+
+// parseRetryDelay parses the retry delay string, returning 5s as default on error.
+func parseRetryDelay(s string) time.Duration {
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 5 * time.Second
+	}
+	return d
 }

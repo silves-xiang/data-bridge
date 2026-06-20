@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/silves-xiang/data-bridge/internal/schema"
 	"github.com/silves-xiang/data-bridge/pkg/source"
 )
 
@@ -143,7 +144,7 @@ func (s *Source) tableInfo(ctx context.Context, tableName string) (source.TableI
 		commonType, length, precision, scale, err := MapSourceType(colType.String)
 		if err != nil {
 			// Log warning, default to text.
-			commonType = 19 // TypeText
+			commonType = schema.TypeText
 		}
 
 		col := source.ColumnInfo{
@@ -215,6 +216,18 @@ func (s *Source) ReadBatch(ctx context.Context, table source.TableInfo, offset u
 	}
 
 	batch := source.RowBatch{Offset: offset}
+	var lastCursor any
+
+	// Find the cursor column index for NextOffset tracking.
+	cursorIdx := -1
+	if cursorCol != nil {
+		for i, col := range table.Columns {
+			if col.Name == cursorCol.Name {
+				cursorIdx = i
+				break
+			}
+		}
+	}
 
 	for rows.Next() {
 		// Create scan targets.
@@ -235,6 +248,9 @@ func (s *Source) ReadBatch(ctx context.Context, table source.TableInfo, offset u
 			}
 		}
 
+		if cursorIdx >= 0 && cursorIdx < len(values) {
+			lastCursor = values[cursorIdx]
+		}
 		batch.Rows = append(batch.Rows, values)
 	}
 
@@ -247,21 +263,19 @@ func (s *Source) ReadBatch(ctx context.Context, table source.TableInfo, offset u
 		batch.IsLast = true
 	}
 
+	// Set NextOffset for cursor-based pagination.
+	if cursorCol != nil && lastCursor != nil {
+		batch.NextOffset = anyToUint64(lastCursor)
+	} else {
+		batch.NextOffset = offset + 1
+	}
+
 	return batch, nil
 }
 
 // DB returns the underlying sql.DB for direct access (used by hooks, etc.).
 func (s *Source) DB() *sql.DB {
 	return s.db
-}
-
-func columnIdx(columns []source.ColumnInfo, name string) int {
-	for i, col := range columns {
-		if col.Name == name {
-			return i
-		}
-	}
-	return -1
 }
 
 func anyToUint64(v any) uint64 {

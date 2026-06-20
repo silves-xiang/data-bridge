@@ -56,11 +56,18 @@ func (p *Pipeline) migrateTable(ctx context.Context, table source.TableInfo) err
 		}
 		if err != nil {
 			tableErr = fmt.Errorf("read batch at offset %d: %w", offset, err)
-			if p.errorMode == "skip_table" {
+			switch p.errorMode {
+			case "skip_table":
 				slog.Error("skipping table after read error", "table", table.Name, "error", tableErr)
 				break
+			case "skip_row":
+				slog.Warn("skipping batch after read error", "table", table.Name, "offset", offset, "error", tableErr)
+				offset++
+				continue
+			default: // fail_fast
+				return tableErr
 			}
-			return tableErr
+			break
 		}
 
 		if len(batch.Rows) == 0 {
@@ -71,11 +78,17 @@ func (p *Pipeline) migrateTable(ctx context.Context, table source.TableInfo) err
 		written, err := p.retryWriteBatch(ctx, table, batch.Rows)
 		if err != nil {
 			tableErr = fmt.Errorf("write batch at offset %d: %w", offset, err)
-			if p.errorMode == "skip_table" {
+			switch p.errorMode {
+			case "skip_table":
 				slog.Error("skipping table after write error", "table", table.Name, "error", tableErr)
-				break
+			case "skip_row":
+				slog.Warn("skipping batch after write error", "table", table.Name, "offset", offset, "error", tableErr)
+				offset++
+				continue
+			default: // fail_fast
+				return tableErr
 			}
-			return tableErr
+			break
 		}
 
 		totalRows += uint64(written)
@@ -154,6 +167,7 @@ func (p *Pipeline) migrateTable(ctx context.Context, table source.TableInfo) err
 }
 
 // retryWriteBatch attempts to write a batch with retries on transient errors.
+// In skip_row mode, falls back to per-row writes, skipping rows that fail.
 func (p *Pipeline) retryWriteBatch(ctx context.Context, table source.TableInfo, rows [][]any) (int, error) {
 	var lastErr error
 	for attempt := 0; attempt < p.maxRetries; attempt++ {
@@ -163,9 +177,9 @@ func (p *Pipeline) retryWriteBatch(ctx context.Context, table source.TableInfo, 
 		}
 		lastErr = err
 		if !isRetryable(err) {
-			return 0, err
+			break
 		}
-		delay := time.Duration(1<<attempt) * time.Second
+		delay := time.Duration(1<<attempt) * p.retryDelay
 		slog.Warn("retrying write batch", "table", table.Name, "attempt", attempt+1, "delay", delay)
 		select {
 		case <-ctx.Done():
@@ -173,7 +187,47 @@ func (p *Pipeline) retryWriteBatch(ctx context.Context, table source.TableInfo, 
 		case <-time.After(delay):
 		}
 	}
+
+	// In skip_row mode, fall back to per-row writes to isolate bad rows.
+	if p.errorMode == "skip_row" {
+		return p.writeRowsIndividually(ctx, table, rows)
+	}
+
 	return 0, fmt.Errorf("max retries exceeded: %w", lastErr)
+}
+
+// writeRowsIndividually writes each row one at a time, skipping rows that fail.
+func (p *Pipeline) writeRowsIndividually(ctx context.Context, table source.TableInfo, rows [][]any) (int, error) {
+	var written int
+	var skipped int
+	for _, row := range rows {
+		batch := [][]any{row}
+		var err error
+		for attempt := 0; attempt < p.maxRetries; attempt++ {
+			_, err = p.sink.WriteBatch(ctx, table, batch)
+			if err == nil {
+				written++
+				break
+			}
+			if !isRetryable(err) {
+				break
+			}
+			delay := time.Duration(1<<attempt) * p.retryDelay
+			select {
+			case <-ctx.Done():
+				return written, ctx.Err()
+			case <-time.After(delay):
+			}
+		}
+		if err != nil {
+			skipped++
+			slog.Warn("skipping row", "table", table.Name, "error", err)
+		}
+	}
+	if skipped > 0 {
+		slog.Warn("skipped rows in batch", "table", table.Name, "skipped", skipped, "written", written)
+	}
+	return written, nil
 }
 
 // isRetryable determines if an error is transient and worth retrying.

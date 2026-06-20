@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/silves-xiang/data-bridge/internal/schema"
 	"github.com/silves-xiang/data-bridge/pkg/source"
 )
 
@@ -186,7 +187,7 @@ func (s *Source) tableInfo(ctx context.Context, tableName string) (source.TableI
 
 		commonType, _, precision, scale, err := MapSourceType(fullType)
 		if err != nil {
-			commonType = 19 // TypeText
+			commonType = schema.TypeText
 		}
 
 		length := 0
@@ -260,9 +261,19 @@ func (s *Source) ReadBatch(ctx context.Context, table source.TableInfo, offset u
 	}
 	defer rows.Close()
 
-	// Get column descriptions.
-	fieldDescs := rows.FieldDescriptions()
 	batch := source.RowBatch{Offset: offset}
+	var lastCursor any
+
+	// Find the cursor column index for NextOffset tracking.
+	cursorIdx := -1
+	if cursorCol != nil {
+		for i, col := range table.Columns {
+			if col.Name == cursorCol.Name {
+				cursorIdx = i
+				break
+			}
+		}
+	}
 
 	for rows.Next() {
 		values, err := rows.Values()
@@ -281,7 +292,9 @@ func (s *Source) ReadBatch(ctx context.Context, table source.TableInfo, offset u
 			}
 		}
 
-		_ = fieldDescs // used for debugging
+		if cursorIdx >= 0 && cursorIdx < len(values) {
+			lastCursor = values[cursorIdx]
+		}
 		batch.Rows = append(batch.Rows, values)
 	}
 
@@ -293,16 +306,14 @@ func (s *Source) ReadBatch(ctx context.Context, table source.TableInfo, offset u
 		batch.IsLast = true
 	}
 
-	return batch, nil
-}
-
-func columnIdx(columns []source.ColumnInfo, name string) int {
-	for i, col := range columns {
-		if col.Name == name {
-			return i
-		}
+	// Set NextOffset for cursor-based pagination.
+	if cursorCol != nil && lastCursor != nil {
+		batch.NextOffset = anyToUint64(lastCursor)
+	} else {
+		batch.NextOffset = offset + 1
 	}
-	return -1
+
+	return batch, nil
 }
 
 func anyToUint64(v any) uint64 {

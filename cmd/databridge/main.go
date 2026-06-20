@@ -96,15 +96,15 @@ func migrateCmd() *cobra.Command {
 		Short: "Run a migration",
 		Long:  `Run a migration from source to sink database as defined in the config file.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load(cfgFile)
-			if err != nil {
-				return fmt.Errorf("load config: %w", err)
-			}
+		cfg, err := config.Load(cfgFile)
+		if err != nil {
+			return fmt.Errorf("load config: %w", err)
+		}
 
-				// Load dynamic plugins.
-				setupPlugins(cfg.PluginDir)
+		// Load dynamic plugins.
+		setupPlugins(cfg.PluginDir)
 
-			slog.Info("databridge starting",
+		slog.Info("databridge starting",
 				"task", cfg.Task.Name,
 				"source", cfg.Source.Type,
 				"sink", cfg.Sink.Type,
